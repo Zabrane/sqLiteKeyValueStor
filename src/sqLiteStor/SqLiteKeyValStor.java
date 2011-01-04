@@ -20,7 +20,7 @@ public class SqLiteKeyValStor<U extends Serializable>{
    * and loads all current keys in the group from disk.
    * 
    * DO NOT instantiate more than one for the same group and DB file. It will not cause any direct failure or error
-   * but because of in memory cacheing neither will see the other's changes. This will lead to subtle bugs in your code.
+   * but because of in memory caching neither will see the other's changes. This will lead to subtle bugs in your code.
    * 
    * You have been warned.
    * 
@@ -109,6 +109,7 @@ public class SqLiteKeyValStor<U extends Serializable>{
   
   /**
    * Updates the entry on-disk. Only requires a key because it assumes you have modified the reference.
+   * <p>
    * If you created a whole new reference use {@link put} instead.
    * @see put 
    * @param key
@@ -134,14 +135,15 @@ public class SqLiteKeyValStor<U extends Serializable>{
   
   /**
    * Blocks while until the backer's queue is empty.
+   * <br>
    * Note that since the backer can be shared there still may be a considerable amount of activity in the queue
+   * <p>
    * 
-   * 
-   * Here is how it works: The queue is locked untill it is empty and commits to the DB. THen it is unlocked and goes into a blocked wait.
-   * Until the queue clears and the DB is synced we won't be able to get into the synchronized queue block.
-   * 
-   * Once the queue is clear and the backing synced, however, we should get access to the the synched block.
-   * We will loop until we can verify the queue is clear, however, for safety.
+   * Here is how it works: The queue is locked until it is empty and commits to the DB. Then it is unlocked and notifies are sent.
+   * <p>
+   * At this point the flush returns and any data that was in the queue until the notify was sent is on disk. 
+   * <p>
+   * Because all methods that can modify the queue are synchronized this means that anything that was added to the queue before the flush is on disk.
    * 
    */
   

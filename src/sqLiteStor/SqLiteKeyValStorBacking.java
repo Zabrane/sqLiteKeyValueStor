@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.Hashtable;
 import java.util.Map;
 import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.TimeUnit;
 
 class SqLiteKeyValStorBacking{
   
@@ -116,22 +117,30 @@ class SqLiteKeyValStorBacking{
   }
   
   /**
-   * Blocks until the queue is empty in 100ms intervals
+   * Blocks until the queue is empty.
+   * <br>
+   * Note that notifies are sent, at most, once every 100ms.
+   * When the queue is active notifies only be sent when the queue is empty.
+   * Note that because of this there is a chance the wait could be much longer.
+   * <p>
+   * Be sure to externally synchronize any methods that might add to the queue that you want to flush
+   * Since the queue can be shared other things might add to it, but if everything makes sure that it's own data is synced
+   * guarantees about data durability can be made. 
+   * 
    */
   
   public void flush(){
     System.err.println("Flushing the DB...");
-    while(true){
-      synchronized(this.queue){
-        if(this.queue.peek() == null){
+    for(;;){
+      try{
+        synchronized(this.queue){
+          this.queue.wait();
           System.err.println("Flushed");
           return;
         }
-      }
-      try{
-        Thread.sleep(101);
       }catch(InterruptedException e){
-        e.printStackTrace();
+        //if we are interrupted go back to waiting some more
+        //This is not a problem
       }
     }
   }
@@ -143,7 +152,6 @@ class DBQueueRunner extends Thread{
   
   private LinkedBlockingDeque<KeyValAction> queue;
   Connection conn;
-  
   public DBQueueRunner(LinkedBlockingDeque<KeyValAction> queue, Connection conn){
     this.queue = queue;
     this.conn = conn;
@@ -155,39 +163,39 @@ class DBQueueRunner extends Thread{
     PreparedStatement prepInsert = null;
     PreparedStatement prepDelete = null;
     /*
-     * The following construct deserves some explination.
+     * The following construct deserves some explanation.
      * 
-     * While there are still items in the queue we will loop without waiting holding a lock on the queue.
-     * When the queue is empty we loop waiting in 100ms intervals for something to be placed on the queue.
-     * When something is added to the queue we lock it and then remove the object. This allows save flushing of the queue 
+     * While there are still items in the queue we will loop tightly
+     * When the queue is empty we loop waiting in 100ms intervals for something to be placed on the queue, sending notifies to anything waiting to let them know the queue is empty.
+     * When something is added to the queue we do not send a notify until it is empty again 
      */
     try{
       prepInsert = this.conn.prepareStatement("INSERT OR REPLACE INTO keyval (key, collection, value) VALUES (?, ?, ?)");
       prepDelete = this.conn.prepareStatement("DELETE FROM keyval WHERE key = ? AND collection = ?");
+      
       while(true){
-        if(this.queue.peek() == null){
-          Thread.sleep(100);
+        synchronized(this.queue){
+          this.queue.notifyAll(); // let any waiters know that the queue should be empty
+        }
+        if((action = this.queue.poll(100, TimeUnit.MILLISECONDS)) == null){
           continue;
         }
         synchronized(this.queue){
-          action = this.queue.remove();
-          if(action.action.equals(KVActions.PUT)){
-            prepInsert.setString(1, action.key);
-            prepInsert.setString(2, action.group);
-            prepInsert.setBytes(3, action.value.toByteArray());
-            prepInsert.executeUpdate();
-          }else{
-            prepDelete.setString(1, action.key);
-            prepDelete.setString(2, action.group);
-            prepDelete.executeUpdate();
-          }
-          
-          action = null; //Close out object refs for the garbage collector quickly before we wait on the queue
-          //For speed only commit when we are caught up.
+          do{
+            if(action.action.equals(KVActions.PUT)){
+              prepInsert.setString(1, action.key);
+              prepInsert.setString(2, action.group);
+              prepInsert.setBytes(3, action.value.toByteArray());
+              prepInsert.executeUpdate();
+            }else{
+              prepDelete.setString(1, action.key);
+              prepDelete.setString(2, action.group);
+              prepDelete.executeUpdate();
+            }
+          }while((action = this.queue.poll()) != null);
+          //For speed only commit when we are caught up and only after we wrote something.
           //If the load is so high that we can never commit performance will be in the HOLE anyway.
-          if(this.queue.peek() == null){
-            this.conn.commit();
-          }
+          this.conn.commit();
         }
       }
     }catch(InterruptedException e){
