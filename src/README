@@ -1,0 +1,2 @@
+Simple key value store that is thread safe and uses Java's native serialization to store copies of objects into a dead simple SQLite DB.
+No need for your users to worry about schemas or changes when upgrading. Just provide a way for them to tell you where to find the DB and use a decently unique group name so you don't overwrite any other data.
