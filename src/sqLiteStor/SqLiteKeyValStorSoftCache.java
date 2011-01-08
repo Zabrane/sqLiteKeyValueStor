@@ -7,6 +7,7 @@ import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Hashtable;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Set;
 import java.lang.ref.SoftReference;
 
@@ -44,6 +45,7 @@ public class SqLiteKeyValStorSoftCache<U extends Serializable>{
     for(String key : this.backing.getAllKeysInGroup(this.group)){
       this.bloom.add(key);
     }
+    new Janitor<U>(this.cache).start();
   }
   
   @SuppressWarnings("unchecked")
@@ -51,7 +53,7 @@ public class SqLiteKeyValStorSoftCache<U extends Serializable>{
     synchronized(this.cache){
       U obj;
       SoftReference<U> ref;
-      if((ref = this.cache.get(key)) != null && (obj = ref.get()) != null)){
+      if((ref = this.cache.get(key)) != null && (obj = ref.get()) != null){
         return obj;
       }
       if(!this.bloom.isPresent(key)){
@@ -180,3 +182,33 @@ public class SqLiteKeyValStorSoftCache<U extends Serializable>{
   
 }
 
+/**
+ * Every 5 minutes it checks to see if any of the soft references have fallen out of memory and clears the soft reference objects from the cache
+ * @author \\
+ *
+ */
+
+class Janitor<U> extends Thread{
+  Hashtable<String, SoftReference<U>>  cache;
+  Janitor(Hashtable<String, SoftReference<U>> cache){
+    this.cache = cache;
+  }
+  
+  public void run(){
+    for(;;){
+      try{
+        Thread.sleep(1000*60*5);
+      }catch(InterruptedException e){
+        //no problem, really
+      }
+      synchronized(cache){
+        for(Entry<String, SoftReference<U>> ent : cache.entrySet()){
+          if(ent.getValue().get() == null){
+            cache.remove(ent.getKey());
+          }
+        }
+      }
+    }
+  }
+  
+}
