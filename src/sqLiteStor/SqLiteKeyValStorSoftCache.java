@@ -8,11 +8,16 @@ import java.util.ArrayList;
 import java.util.Hashtable;
 import java.util.Map;
 import java.util.Set;
+import java.lang.ref.SoftReference;
 
-public class SqLiteKeyValStor<U extends Serializable>{
+import com.facebook.infrastructure.utils.CountingBloomFilter;
+
+
+public class SqLiteKeyValStorSoftCache<U extends Serializable>{
   private String group;
   private SqLiteKeyValStorBacking backing;
-  private Hashtable<String, U> cache;
+  private Hashtable<String, SoftReference<U>> cache;
+  private CountingBloomFilter bloom;
   
   /**
    * Creates a new instance of the key value store. Creates or uses an existing disk backing file
@@ -31,18 +36,34 @@ public class SqLiteKeyValStor<U extends Serializable>{
    * @param group
    * @param dbFile
    */
-  public SqLiteKeyValStor(String group, String dbFile){
+  public SqLiteKeyValStorSoftCache(String group, String dbFile){
     this.backing = SqLiteKeyValStorBacking.getInstance(dbFile);
     this.group = group;
-    this.cache = new Hashtable<String, U>();
-    //To speed up misses we warm the cache
-    //This way we can quickly return nulls based on the bloom filter
-    this.backing.getAllInGroup(this.group, this.cache);
+    this.cache = new Hashtable<String, SoftReference<U>>();
+    this.bloom = new CountingBloomFilter(1024, 36);
+    for(String key : this.backing.getAllKeysInGroup(this.group)){
+      this.bloom.add(key);
+    }
   }
   
+  @SuppressWarnings("unchecked")
   public U get(String key){
     synchronized(this.cache){
-      U obj = this.cache.get(key);
+      U obj;
+      SoftReference<U> ref;
+      if((ref = this.cache.get(key)) != null && (obj = ref.get()) != null)){
+        return obj;
+      }
+      if(!this.bloom.isPresent(key)){
+        return null;
+      }
+      obj = (U)this.backing.get(key, this.group);
+      if(obj != null){
+        this.cache.put(key, new SoftReference<U>(obj));
+      }else{
+        this.cache.remove(key);
+        this.bloom.delete(key);
+      }
       return obj;
     }
   }
@@ -53,15 +74,20 @@ public class SqLiteKeyValStor<U extends Serializable>{
    * 
    * @return array of Map.Entry's 
    */
-  @SuppressWarnings("unchecked")
-  public Map.Entry<String,U>[] getAllEntryArray(){
+  public Map<String,U> getAllEntryArray(){
     synchronized(this.cache){
-      Set<Map.Entry<String,U>> ents = this.cache.entrySet();
-      ArrayList<Map.Entry<String,U>> ret = new ArrayList<Map.Entry<String,U>>();
-      for(Map.Entry<String,U> ent : ents){
-        ret.add(ent);
+      Hashtable<String, U> ret = new Hashtable<String, U>();
+      this.backing.getAllInGroup(this.group, ret);
+      SoftReference<U> obj;
+      for(Map.Entry<String,U> ent : ret.entrySet()){
+        if((obj = this.cache.get(ent.getKey())) != null){
+          ent.setValue(obj.get());
+        }else{
+          this.cache.put(ent.getKey(), new SoftReference<U>(ent.getValue())); //needed to maintain continuity of soft references. If not for this then a get could return a DIFFERENT instance of what should be the same object!
+          this.bloom.add(ent.getKey());
+        }
       }
-      return (Map.Entry<String, U>[])ret.toArray();
+      return ret;
     }
   }
   
@@ -74,14 +100,17 @@ public class SqLiteKeyValStor<U extends Serializable>{
   
   public void put(String key, U obj){
     synchronized(this.cache){
-      this.cache.put(key, obj);
+      if(!bloom.isPresent(key)){
+        this.bloom.add(key);
+      }
+      this.cache.put(key, new SoftReference<U>(obj));
       ByteArrayOutputStream baos = new ByteArrayOutputStream();
       ObjectOutputStream objOut;
       try{
         objOut = new ObjectOutputStream(baos);
         objOut.writeObject(obj);
         objOut.close();
-        this.backing.queue.add(new KeyValAction(key, this.group, baos, KVActions.PUT));
+        this.backing.queue.add(new KeyValAction(key, this.group, baos, KVActions.PUT, obj));
       }catch(IOException e){
         e.printStackTrace();
       }
@@ -96,6 +125,9 @@ public class SqLiteKeyValStor<U extends Serializable>{
   public void remove(String key){
     synchronized(this.cache){
       this.cache.remove(key);
+      if(bloom.isPresent(key)){
+        this.bloom.delete(key);
+      }
       this.backing.queue.add(new KeyValAction(key, this.group, null, KVActions.REMOVE));
     }
   }
@@ -110,8 +142,8 @@ public class SqLiteKeyValStor<U extends Serializable>{
   
   public void update(String key){
     synchronized(this.cache){
-      U fromCache = cache.get(key);
-      if(!(fromCache == null)){
+      U fromCache = cache.get(key).get();
+      if(!(fromCache == null)){ //It must have been removed explicitly. So long as a hard reference exists we won't find a null here for a valid key
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         ObjectOutputStream objOut;
         try{
@@ -147,3 +179,4 @@ public class SqLiteKeyValStor<U extends Serializable>{
   }
   
 }
+
