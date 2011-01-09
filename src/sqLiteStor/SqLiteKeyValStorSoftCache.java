@@ -51,11 +51,14 @@ public class SqLiteKeyValStorSoftCache<U extends Serializable>{
     synchronized(this.cache){
       U obj;
       SoftReference<U> ref;
-      if((ref = this.cache.get(key)) != null && (obj = ref.get()) != null){
-        return obj;
-      }
-      if(!this.bloom.isPresent(key)){
-        return null;
+      if((ref = this.cache.get(key)) != null){
+        if((obj = ref.get()) != null){
+          return obj;
+        }
+      }else{
+        if(!this.bloom.isPresent(key)){ //if the key is in the cache but it just has expired then we do not ALSO need to check the bloom filter
+          return null;
+        }
       }
       obj = (U)this.backing.get(key, this.group);
       if(obj != null){
