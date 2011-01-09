@@ -9,8 +9,12 @@ public class KeyValAction{
   public String key;
   public String group;
   public ByteArrayOutputStream value;
+
+  //Used for the soft cache to keep the object in memory until it is on the disk
+  //Without it an object could fall out of memory and the DB could be queried before the queue runner put it onto the disk
   @SuppressWarnings("unused")
-  private Object hardRef; //Used for the soft cache to keep the object in memory until it is on the disk
+  private Object hardRef;
+  
   
   KeyValAction(String key, String group, ByteArrayOutputStream val, KVActions action){
     this.key = key;

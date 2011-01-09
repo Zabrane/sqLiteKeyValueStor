@@ -15,17 +15,17 @@ public class SqLiteKeyValStor<U extends Serializable>{
   private Hashtable<String, U> cache;
   
   /**
-   * Creates a new instance of the key value store. Creates or uses an existing disk backing file
-   * and loads all current keys in the group from disk.
-   * 
+   * Creates a new instance of the key value store.
+   * Loads all current keys and values in the group from disk.
+   * <p>
    * DO NOT instantiate more than one for the same group and DB file. It will not cause any direct failure or error
    * but because of in memory caching neither will see the other's changes. This will lead to subtle bugs in your code.
-   * 
+   * <p>
    * You have been warned.
-   * 
+   * <p>
    * The backing DB file is asynchronous so that puts and updates can return faster. The back-end flushes on exit,
    * but be sure that at that point in time nothing is trying to add to the queue. It might not make it.
-   * 
+   * <p>
    * All functions are thread safe.
    * 
    * @param group

@@ -4,11 +4,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
-import java.util.ArrayList;
 import java.util.Hashtable;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.Set;
 import java.lang.ref.SoftReference;
 
 import com.facebook.infrastructure.utils.CountingBloomFilter;
@@ -21,19 +19,19 @@ public class SqLiteKeyValStorSoftCache<U extends Serializable>{
   private CountingBloomFilter bloom;
   
   /**
-   * Creates a new instance of the key value store. Creates or uses an existing disk backing file
-   * and loads all current keys in the group from disk.
-   * 
+   * Creates a new instance of the key value store with a SoftReference cache to save memory.
+   * Loads all current keys in the group from disk.
+   * <p>
    * DO NOT instantiate more than one for the same group and DB file. It will not cause any direct failure or error
    * but because of in memory caching neither will see the other's changes. This will lead to subtle bugs in your code.
-   * 
+   * <p>
    * You have been warned.
-   * 
+   * <p>
    * The backing DB file is asynchronous so that puts and updates can return faster. The back-end flushes on exit,
    * but be sure that at that point in time nothing is trying to add to the queue. It might not make it.
-   * 
+   * <p>
    * All functions are thread safe.
-   * 
+   * @author \\
    * @param group
    * @param dbFile
    */
@@ -86,7 +84,6 @@ public class SqLiteKeyValStorSoftCache<U extends Serializable>{
           ent.setValue(obj.get());
         }else{
           this.cache.put(ent.getKey(), new SoftReference<U>(ent.getValue())); //needed to maintain continuity of soft references. If not for this then a get could return a DIFFERENT instance of what should be the same object!
-          this.bloom.add(ent.getKey());
         }
       }
       return ret;
@@ -94,7 +91,11 @@ public class SqLiteKeyValStorSoftCache<U extends Serializable>{
   }
   
   /**
-   * Adds an entry to the table and puts a copy on disk. If you have modified an existing entry use {@link update} instead
+   * Adds an entry to the table and puts a copy on disk.
+   * If you have modified an existing entry use {@link update} instead.
+   * <p>
+   * Caution: if you have created a new object and wish to replace an existing key with that use {@link updateRef}
+   * This will keep the bloom filter as clean as possible.
    * 
    * @param key
    * @param obj
@@ -102,9 +103,7 @@ public class SqLiteKeyValStorSoftCache<U extends Serializable>{
   
   public void put(String key, U obj){
     synchronized(this.cache){
-      if(!bloom.isPresent(key)){
-        this.bloom.add(key);
-      }
+      this.bloom.add(key);
       this.cache.put(key, new SoftReference<U>(obj));
       ByteArrayOutputStream baos = new ByteArrayOutputStream();
       ObjectOutputStream objOut;
@@ -137,15 +136,23 @@ public class SqLiteKeyValStorSoftCache<U extends Serializable>{
   /**
    * Updates the entry on-disk. Only requires a key because it assumes you have modified the reference.
    * <p>
-   * If you created a whole new reference use {@link put} instead.
+   * If you created a whole new reference for an existing key use {@link updateRef} instead.
+   * <p>
+   * If the object is not in the cache, or it has fallen out of memory we will throw exceptions. If there is a hard reference anywhere in the application this won't happen.
+   * If you get any exceptions from this call, make sure you have a copy of the object somewhere when this is called.
    * @see put 
    * @param key
    */
   
   public void update(String key){
     synchronized(this.cache){
-      U fromCache = cache.get(key).get();
-      if(!(fromCache == null)){ //It must have been removed explicitly. So long as a hard reference exists we won't find a null here for a valid key
+      U fromCache;
+      SoftReference<U> ref;
+      if((ref = this.cache.get(key)) == null){
+        throw new IllegalArgumentException("key is not present");
+      }
+      fromCache = ref.get();
+      if(!(fromCache == null)){
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         ObjectOutputStream objOut;
         try{
@@ -156,12 +163,44 @@ public class SqLiteKeyValStorSoftCache<U extends Serializable>{
         }catch(IOException e){
           e.printStackTrace();
         }
+      }else{
+        throw new IllegalArgumentException("Object has fallen out of memory");
       }
     }
   }
   
   /**
-   * Blocks while until the backer's queue is empty.
+   * Almost the same as put, but does not update the bloom filter.
+   * If something is known to already be in the store, use this instead o the bloom filter does not start returning false positives any more than need be
+   * <p>
+   * Though it is not a hard guarantee of correctness it will throw an exception if the key does not exist in the bloom filter.
+   * This will at least stop unreachable keys from being created and should demonstrate when client code is incorrectly calling this function.
+   * 
+   * @param key
+   * @param obj
+   */
+  
+  public void updateRef(String key, U obj){
+    if(!this.bloom.isPresent(key)){
+      throw new IllegalArgumentException("key is not present");
+    }
+    synchronized(this.cache){
+      this.cache.put(key, new SoftReference<U>(obj));
+      ByteArrayOutputStream baos = new ByteArrayOutputStream();
+      ObjectOutputStream objOut;
+      try{
+        objOut = new ObjectOutputStream(baos);
+        objOut.writeObject(obj);
+        objOut.close();
+        this.backing.queue.add(new KeyValAction(key, this.group, baos, KVActions.PUT, obj));
+      }catch(IOException e){
+        e.printStackTrace();
+      }
+    }
+  }
+  
+  /**
+   * Blocks until the backer's queue is empty.
    * <br>
    * Note that since the backer can be shared there still may be a considerable amount of activity in the queue
    * <p>
