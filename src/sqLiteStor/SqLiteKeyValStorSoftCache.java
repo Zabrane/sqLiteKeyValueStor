@@ -39,7 +39,7 @@ public class SqLiteKeyValStorSoftCache<U extends Serializable>{
     this.backing = SqLiteKeyValStorBacking.getInstance(dbFile);
     this.group = group;
     this.cache = new Hashtable<String, SoftReference<U>>();
-    this.bloom = new CountingBloomFilter(1024, 36);
+    this.bloom = new CountingBloomFilter(262144, 256);
     for(String key : this.backing.getAllKeysInGroup(this.group)){
       this.bloom.add(key);
     }
@@ -60,9 +60,6 @@ public class SqLiteKeyValStorSoftCache<U extends Serializable>{
       obj = (U)this.backing.get(key, this.group);
       if(obj != null){
         this.cache.put(key, new SoftReference<U>(obj));
-      }else{
-        this.cache.remove(key);
-        this.bloom.delete(key);
       }
       return obj;
     }
