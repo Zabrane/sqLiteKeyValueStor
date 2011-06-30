@@ -158,6 +158,7 @@ class DBQueueRunner extends Thread{
   }
   
   public void run(){
+    Thread.currentThread().setDaemon(true);
     System.err.println("DB Queue runner started");
     KeyValAction action;
     PreparedStatement prepInsert = null;
