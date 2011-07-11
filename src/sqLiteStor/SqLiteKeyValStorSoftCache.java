@@ -74,7 +74,7 @@ public class SqLiteKeyValStorSoftCache<U extends Serializable>{
    * 
    * @return array of Map.Entry's 
    */
-  public Map<String,U> getAllEntryArray(){
+  public Map<String,U> getAllEntryMap(){
     synchronized(this.cache){
       Hashtable<String, U> ret = new Hashtable<String, U>();
       this.backing.getAllInGroup(this.group, ret);
